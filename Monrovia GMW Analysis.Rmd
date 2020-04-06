@@ -2,7 +2,9 @@
 title: "Liberia GCF: Monrovia Mangrove Degradation Analysis"
 author: "Ruan de Wet"
 date: "06/04/2020"
-output: html_document
+output: 
+  html_document:
+    toc: true
 ---
 
 ```{r setup, include=FALSE}
@@ -180,6 +182,8 @@ write_csv(df_mangrv_tseries, "Data/Liberia GCF_GMW Mangrove Area.csv")
 
 ```
 
+## Results
+
 What are the overall trends in mangrove extent looking like?
 
 ```{r Viz GMW timeseries}
@@ -197,7 +201,7 @@ gmw_plot = df_mangrv_tseries %>%
 
 plotly::ggplotly(gmw_plot)
 
-# ggsave(gmw_plot, filename = "Figures/Liberia GCF_GMW Mangrove Area.png", height = 4)
+ggsave(gmw_plot, filename = "Figures/Liberia GCF_GMW Mangrove Area.png", height = 4)
 
 ```
 
