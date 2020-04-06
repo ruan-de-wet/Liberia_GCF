@@ -1,0 +1,245 @@
+---
+title: "Liberia GCF: Monrovia Mangrove Degradation Analysis"
+author: "Ruan de Wet"
+date: "06/04/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r Load libraries, message=FALSE}
+
+
+library("sp")
+library("sf")
+library("tmap")
+library("rgeos")
+library("rgdal")
+library("raster")
+library("ggplot2")
+library("tidyr")
+library("dplyr")
+library("stringr")
+library("fasterize")
+library("readxl")
+library("readr")
+library("rnaturalearth")
+
+ # rm(list = ls())
+
+today = Sys.Date() %>%
+  format("%y%m%d_")
+
+st_plot = function(x, ...) {x %>% st_geometry() %>% plot(...)}
+
+```
+
+## Objective
+
+The purpose of this analysis is to quantify and map the changes in mangrove extent for Monrovia, Liberia. 
+
+The brief received states:
+
+> Analysis of historical landcover data (circa 1990-2016) to identify potential degradation trends and hotspots within the Mesurado Wetlands. 
+
+## Data source
+
+The default landcover data would be ESA LCC, but the mangrove extent for ESA is based on the [Global Mangrove Watch (GMW)](https://data.unep-wcmc.org/datasets/45) data. So might as well go straight to the source. The temporal coverage of the GMW data is from 1996-2016. Hopefully, that will do. If not, we will need to re-assess some complimentary datasets. 
+
+## Analysis
+
+Before getting started, let's set up the environment. The projected CRS for Liberia has been extracted from [epsg.io](https://epsg.io/2162). Frustratingly, the native CRS for Liberia still uses latlong units. 
+
+```{r Import spatial tidbits}
+
+dsn_proj = getwd()
+dsn_gmw = "G:/Ruan/R/_Reference Data/GMW_001_GlobalMangroveWatch"
+
+lbrcrs = "+proj=utm +zone=29 +ellps=clrk80 +towgs84=-88,4,101,0,0,0,0 +units=m +no_defs "
+lonlatcrs = "+proj=longlat +datum=WGS84 +no_defs +ellps=WGS84 +towgs84=0,0,0"
+
+# Area of interest
+bord_lbr = ne_countries(country = "Liberia", scale = 10, returnclass = "sf")
+aoi_lbr = st_read("Data/AOI_Provided/total_area.shp") %>%
+  st_make_grid(n = 1) %>% 
+  st_as_sf()
+rast_aoi = aoi_lbr %>%  fasterize::raster(res = c(0.000025, 0.000025), vals = 0)
+
+# rast_aoi %>% projectRaster(crs = lbrcrs)
+
+# Mangroves dsn and metadata
+dsn_gmw_shp = list.files(paste0(dsn_gmw, "/01_Data/"),
+           pattern = ".shp",
+           all.files = T, full.names = T)
+dsn_gmw_shp = dsn_gmw_shp[str_which(dsn_gmw_shp, pattern = "xml", negate = T)]
+
+gmw_years = dsn_gmw_shp %>%
+  str_extract("(?<=_Data/GMW_).+") %>%
+  str_extract(".+(?=_v2)") %>%
+  as.numeric()
+
+```
+
+Now that we know where we're working and where our data are, we can start processing the data. To start, we will clip the global GMW data to the area of interest. 
+
+```{r Clip GMW data, eval = F}
+
+# Import and crop to AOI
+
+list_gmw_aoi = list()
+
+list_gmw_aoi[[1]] = st_read(dsn_gmw_shp[1]) %>%
+  st_crop(aoi_lbr)
+
+st_plot(list_gmw_aoi[[1]])
+
+for(i in 2:length(gmw_years)) {
+
+  list_gmw_aoi[[i]] = st_read(dsn_gmw_shp[i]) %>%
+    st_crop(aoi_lbr)
+
+}
+
+names(list_gmw_aoi) = gmw_years
+
+for(i in 1:length(gmw_years)) {st_write(list_gmw_aoi[[i]], paste0("Data/", today, "GMW_Monrovia_", gmw_years[i], ".gpkg"))}
+
+```
+
+
+Now that we have the data we want where we want it, we can rasterize the polygons and save the result. 
+
+```{r Rasterize clipped GMW data, eval = F}
+
+dsn_gmw_aoi = list.files(paste0(dsn_proj, "/Data/"),
+           pattern = ".gpkg",
+           all.files = T, full.names = T) 
+
+list_gmw_aoi = dsn_gmw_aoi[1] %>% 
+  st_read() %>%
+  fasterize(raster = rast_aoi) %>%
+  list()
+names(list_gmw_aoi[[1]]) = paste0("GMW_", gmw_years[1])
+
+for(i in 2:length(gmw_years)){
+list_gmw_aoi[[i]] = dsn_gmw_aoi[i] %>% 
+  st_read() %>%
+  fasterize(raster = rast_aoi)
+names(list_gmw_aoi[[i]]) = paste0("GMW_", gmw_years[i])
+}
+
+stack_gmw_aoi = do.call(stack, list_gmw_aoi)
+writeRaster(stack_gmw_aoi, paste0("Data/", today, "Monrovia.tif"), bylayer = T, suffix = "names", overwrite = T)
+
+```
+
+Now that we've clprocessed the data, let's read it in as a RasterStack. 
+
+```{r Load processed GMW data}
+
+dsn_gmw_aoi = list.files(paste0(dsn_proj, "/Data/"),
+           pattern = ".tif",
+           all.files = T, full.names = T) 
+dsn_gmw_aoi = dsn_gmw_aoi[1:7]
+
+stack_gmw_aoi = stack(dsn_gmw_aoi)
+names(stack_gmw_aoi) = paste0("GMW_", gmw_years)
+
+# stack_gmw_aoi_m = stack_gmw_aoi %>% projectRaster(crs = lbrcrs, method = "ngb")
+
+```
+
+Visual assessments are great, and we'll get there, but first lets have a look what the dynamics are like in total. 
+
+```{r Extract mangrove extents, eval = F}
+
+df_freq = tibble(AOI = "Monrovia", Years = gmw_years, ncell = NA) 
+
+
+  for(k in 1:length(gmw_years)) {
+   sum_year = stack_gmw_aoi[[k]] %>%
+    # calc(fun = sum, na. rm = T) %>%
+     getValues() %>%
+     sum(na.rm = T)
+  
+   df_freq[k, 3] = sum_year
+  
+  }
+  
+# stack_gmw_aoi[[1]] %>% projectRaster(crs = lbrcrs)
+
+cellArea = 2.77*2.76
+
+df_mangrv_tseries = df_freq %>%
+  mutate(Area_m2 = ncell*cellArea,
+         Area_ha = Area_m2/10^4) 
+
+write_csv(df_mangrv_tseries, "Data/Liberia GCF_GMW Mangrove Area.csv")
+
+```
+
+What are the overall trends in mangrove extent looking like?
+
+```{r Viz GMW timeseries}
+
+df_mangrv_tseries = read_csv("Data/Liberia GCF_GMW Mangrove Area.csv")
+
+gmw_plot = df_mangrv_tseries %>%
+  ggplot(aes(x = Years, y = Area_ha)) +
+  geom_line() +
+  geom_point() +
+  labs(y = "Mangrove extent (ha)") +
+  scale_y_continuous(labels=function(x) format(x, big.mark = ",", scientific = FALSE)) +
+  # facet_grid(AOI~., scales = "free") +
+  theme_bw()
+
+plotly::ggplotly(gmw_plot)
+
+# ggsave(gmw_plot, filename = "Figures/Liberia GCF_GMW Mangrove Area.png", height = 4)
+
+```
+
+Pretty devastating drop between 2009 and 2010. Let's see how that translates spatially. 
+
+To view the change over time, we're going to reclassify the rasters so that the values of each layer in the stack translate to the given year. Then we can combine them into a single raster, keeping only the maximum value. That should give us a single raster layer with the latest date of mangrove extent. 
+
+```{r Reduce stack into raster of latest years, eval = F}
+
+stack_gmw_aoi_years = stack_gmw_aoi
+
+for(i in 1:length(gmw_years)){
+mat_year = matrix(c(1, gmw_years[i]), nrow = 1)
+stack_gmw_aoi_years[[i]] = stack_gmw_aoi_years[[i]] %>% reclassify(mat_year)
+}
+
+rast_gmw_aoi = raster::calc(stack_gmw_aoi_years, fun = max, na.rm = T)
+
+writeRaster(rast_gmw_aoi, paste0("Data/", today, "Monrovia_GMW_RasterYears.tif"), overwrite = T)
+
+```
+
+Now that we've got a single raster layer with the data we need, we can start making some maps!
+
+```{r Map the things}
+
+rast_gmw_aoi = list.files(paste0(dsn_proj, "/Data/"),
+           pattern = "RasterYears.tif",
+           all.files = T, full.names = T) %>% raster
+
+pal_gmw_change = c(RColorBrewer::brewer.pal(6, "YlOrRd"), "#336633")
+
+tmap_mode("view")
+# tmap_options(max.raster = c(plot = 1e+08, view = 1e+06))
+
+map_gmw_change = tm_shape(rast_gmw_aoi, is.master = T) +
+  tm_raster(style = "cat", palette = pal_gmw_change, title = "Mangrove extent", labels = as.character(gmw_years)) +
+tm_layout(legend.outside = T) +
+tm_basemap(server = c("OpenStreetMap", "Esri.WorldImagery"))
+
+# tmap_save(map_gmw_change, "Figures/Liberia GCF_GMW Mangrove Change.png")
+map_gmw_change
+
+```
+
