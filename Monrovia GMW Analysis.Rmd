@@ -201,7 +201,7 @@ gmw_plot = df_mangrv_tseries %>%
 
 plotly::ggplotly(gmw_plot)
 
-ggsave(gmw_plot, filename = "Figures/Liberia GCF_GMW Mangrove Area.png", height = 4)
+# ggsave(gmw_plot, filename = "Figures/Liberia GCF_GMW Mangrove Area.png", height = 4)
 
 ```
 
@@ -235,15 +235,40 @@ rast_gmw_aoi = list.files(paste0(dsn_proj, "/Data/"),
 pal_gmw_change = c(RColorBrewer::brewer.pal(6, "YlOrRd"), "#336633")
 
 tmap_mode("view")
-# tmap_options(max.raster = c(plot = 1e+08, view = 1e+06))
+tmap_options(max.raster = c(view = 10^6))
 
 map_gmw_change = tm_shape(rast_gmw_aoi, is.master = T) +
   tm_raster(style = "cat", palette = pal_gmw_change, title = "Mangrove extent", labels = as.character(gmw_years)) +
 tm_layout(legend.outside = T) +
 tm_basemap(server = c("OpenStreetMap", "Esri.WorldImagery"))
 
-# tmap_save(map_gmw_change, "Figures/Liberia GCF_GMW Mangrove Change.png")
+# tmap_save(map_gmw_change, "Figures/Liberia GCF_GMW Mangrove Change.html")
 map_gmw_change
 
 ```
+
+This works well enough, but the original data were vector files. For such a small area, presenting the polygons may be better than a rasterized version. So let's quickly compare the 1996 and 2016 polygons. 
+
+```{r Compare initial and final polygons}
+
+dsn_gmw_aoi = list.files(paste0(dsn_proj, "/Data/"),
+           pattern = ".gpkg",
+           all.files = T, full.names = T) 
+
+poly_gmw_aoi_96 = dsn_gmw_aoi[str_detect(dsn_gmw_aoi, "1996")] %>% st_read
+poly_gmw_aoi_16 = dsn_gmw_aoi[str_detect(dsn_gmw_aoi, "2016")] %>% st_read
+
+poly_gmw_aoi_loss = st_difference(st_union(poly_gmw_aoi_96), st_union(poly_gmw_aoi_16))
+
+plot(poly_gmw_aoi_loss)
+
+tm_shape(poly_gmw_aoi_16) +
+  tm_polygons(col = "#336633", alpha = 0.6) +
+tm_shape(poly_gmw_aoi_loss) +
+  tm_polygons(col = "red", alpha = 0.6)  +
+tm_basemap(server = c("OpenStreetMap", "Esri.WorldImagery"))
+
+```
+
+As it turns out, this doesn't improve the result much (or at all). The GMW vector files are clearly converted from a raster analysis. It appears that the original resolution was approximately 25 x 25 m. I could probably have figured that out by reading the documentation properly. But alas.  
 
